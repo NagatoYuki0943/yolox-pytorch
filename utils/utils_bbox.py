@@ -29,43 +29,67 @@ def yolo_correct_boxes(box_xy, box_wh, input_shape, image_shape, letterbox_image
     boxes *= np.concatenate([image_shape, image_shape], axis=-1)
     return boxes
 
+#------------------------#
+#   解码预测数据
+#------------------------#
 def decode_outputs(outputs, input_shape):
-    grids   = []
-    strides = []
+    """
+    outputs:        输入前代表每个特征层的预测结果
+        batch_size, 5 + num_classes, 80, 80
+        batch_size, 5 + num_classes, 40, 40
+        batch_size, 5 + num_classes, 20, 20
+    input_shape:    输入图像大小 640 640
+
+    """
+    grids   = []    # 每个特征层对应的网格点
+    strides = []    # 每个特征层对应的步长
+    # 获得后面的宽高
     hw      = [x.shape[-2:] for x in outputs]
     #---------------------------------------------------#
     #   outputs输入前代表每个特征层的预测结果
-    #   batch_size, 4 + 1 + num_classes, 80, 80 => batch_size, 4 + 1 + num_classes, 6400
+    #
+    #   flatten(start_dim=2) 将后面两个宽高铺平放到一起
+    #   batch_size, 4 + 1 + num_classes, 80, 80 => batch_size, 5 + num_classes, 6400
     #   batch_size, 5 + num_classes, 40, 40
     #   batch_size, 5 + num_classes, 20, 20
+    #
+    #   三层堆叠到一起
     #   batch_size, 4 + 1 + num_classes, 6400 + 1600 + 400 -> batch_size, 4 + 1 + num_classes, 8400
-    #   堆叠后为batch_size, 8400, 5 + num_classes
+    #   堆叠,转置后为"""
+    #       [batch_size, 8400, 5 + num_classes]
     #---------------------------------------------------#
     outputs = torch.cat([x.flatten(start_dim=2) for x in outputs], dim=2).permute(0, 2, 1)
     #---------------------------------------------------#
     #   获得每一个特征点属于每一个种类的概率
+    #   0~1之间,表示可能性
     #---------------------------------------------------#
     outputs[:, :, 4:] = torch.sigmoid(outputs[:, :, 4:])
+    #---------------------------------------------------#
+    #   处理三层的宽高数据
+    #---------------------------------------------------#
     for h, w in hw:
         #---------------------------#
-        #   根据特征层的高宽生成网格点
-        #---------------------------#   
+        #   根据输入特征层的高宽生成网格点
+        #---------------------------#
         grid_y, grid_x  = torch.meshgrid([torch.arange(h), torch.arange(w)])
         #---------------------------#
+        #   torch.stack() 拼接后会添加新维度, 2 就是在最后维度添加标记
         #   1, 6400, 2
         #   1, 1600, 2
-        #   1, 400, 2
-        #---------------------------#   
+        #   1, 400,  2
+        #---------------------------#
         grid            = torch.stack((grid_x, grid_y), 2).view(1, -1, 2)
         shape           = grid.shape[:2]
 
         grids.append(grid)
+        # 每个特征层对应的步长
         strides.append(torch.full((shape[0], shape[1], 1), input_shape[0] / h))
+    """将网格点堆叠到一起"""
     #---------------------------#
     #   将网格点堆叠到一起
     #   1, 6400, 2
     #   1, 1600, 2
-    #   1, 400, 2
+    #   1, 400,  2
     #
     #   1, 8400, 2
     #---------------------------#
@@ -74,27 +98,29 @@ def decode_outputs(outputs, input_shape):
     #------------------------#
     #   根据网格点进行解码
     #------------------------#
-    outputs[..., :2]    = (outputs[..., :2] + grids) * strides
-    outputs[..., 2:4]   = torch.exp(outputs[..., 2:4]) * strides
+    outputs[...,  :2]   = (outputs[..., :2] + grids) * strides      # outputs 0,1内容加上坐标,乘以步长得到预测框中心点坐标
+    outputs[..., 2:4]   = torch.exp(outputs[..., 2:4]) * strides    # outputs 2,3内容取指数,乘以步长得到预测框宽高
     #-----------------#
-    #   归一化
+    #   归一化,除以宽高
     #-----------------#
     outputs[..., [0,2]] = outputs[..., [0,2]] / input_shape[1]
     outputs[..., [1,3]] = outputs[..., [1,3]] / input_shape[0]
     return outputs
 
+
+"""非极大值抑制"""
 def non_max_suppression(prediction, num_classes, input_shape, image_shape, letterbox_image, conf_thres=0.5, nms_thres=0.4):
     #----------------------------------------------------------#
-    #   将预测结果的格式转换成左上角右下角的格式。
-    #   prediction  [batch_size, num_anchors, 85]
+    #   将预测结果的格式转换成左上角右下角坐标的格式。
+    #   prediction:   [batch_size, num_anchors, 25]
     #----------------------------------------------------------#
     box_corner          = prediction.new(prediction.shape)
-    box_corner[:, :, 0] = prediction[:, :, 0] - prediction[:, :, 2] / 2
-    box_corner[:, :, 1] = prediction[:, :, 1] - prediction[:, :, 3] / 2
-    box_corner[:, :, 2] = prediction[:, :, 0] + prediction[:, :, 2] / 2
-    box_corner[:, :, 3] = prediction[:, :, 1] + prediction[:, :, 3] / 2
-    prediction[:, :, :4] = box_corner[:, :, :4]
-    
+    box_corner[:, :, 0] = prediction[:, :, 0] - prediction[:, :, 2] / 2 # x1
+    box_corner[:, :, 1] = prediction[:, :, 1] - prediction[:, :, 3] / 2 # y1
+    box_corner[:, :, 2] = prediction[:, :, 0] + prediction[:, :, 2] / 2 # x2
+    box_corner[:, :, 3] = prediction[:, :, 1] + prediction[:, :, 3] / 2 # y2
+    prediction[:, :, :4] = box_corner[:, :, :4]                         # 替换前4个数据换成左上角右下角的格式
+
     output = [None for _ in range(len(prediction))]
     #----------------------------------------------------------#
     #   对输入图片进行循环，一般只会进行一次
@@ -102,28 +128,31 @@ def non_max_suppression(prediction, num_classes, input_shape, image_shape, lette
     for i, image_pred in enumerate(prediction):
         #----------------------------------------------------------#
         #   对种类预测部分取max。
+        #   image_pred[:, 5:5 + num_classes] 取出分类信息
         #   class_conf  [num_anchors, 1]    种类置信度
         #   class_pred  [num_anchors, 1]    种类
         #----------------------------------------------------------#
         class_conf, class_pred = torch.max(image_pred[:, 5:5 + num_classes], 1, keepdim=True)
 
         #----------------------------------------------------------#
-        #   利用置信度进行第一轮筛选
+        #   利用置信度进行第一轮筛选,返回0/1
+        #   image_pred[:, 4] * class_conf[:, 0]  是否包含物体 * 置信度 得到最后的置信度
         #----------------------------------------------------------#
         conf_mask = (image_pred[:, 4] * class_conf[:, 0] >= conf_thres).squeeze()
 
         if not image_pred.size(0):
             continue
         #-------------------------------------------------------------------------#
+        #   堆叠位置参数,是否有物体,种类置信度,种类
         #   detections  [num_anchors, 7]
-        #   7的内容为：x1, y1, x2, y2, obj_conf, class_conf, class_pred
+        #   7的内容为：x1, y1, x2, y2, obj_conf(是否包含物体置信度), class_conf(种类置信度), class_pred(种类预测值)
         #-------------------------------------------------------------------------#
         detections = torch.cat((image_pred[:, :5], class_conf, class_pred.float()), 1)
         detections = detections[conf_mask]
-        
+
         nms_out_index = boxes.batched_nms(
-            detections[:, :4],
-            detections[:, 4] * detections[:, 5],
+            detections[:, :4],                      # 坐标
+            detections[:, 4] * detections[:, 5],    # 先验框置信度 * 种类置信度 结果是1维数据
             detections[:, 6],
             nms_thres,
         )
@@ -154,7 +183,7 @@ def non_max_suppression(prediction, num_classes, input_shape, image_shape, lette
         #         nms_thres
         #     )
         #     max_detections = detections_class[keep]
-            
+
         #     # # 按照存在物体的置信度排序
         #     # _, conf_sort_index = torch.sort(detections_class[:, 4]*detections_class[:, 5], descending=True)
         #     # detections_class = detections_class[conf_sort_index]
@@ -169,10 +198,11 @@ def non_max_suppression(prediction, num_classes, input_shape, image_shape, lette
         #     #     detections_class = detections_class[1:][ious < nms_thres]
         #     # # 堆叠
         #     # max_detections = torch.cat(max_detections).data
-            
+
         #     # Add max detections to outputs
         #     output[i] = max_detections if output[i] is None else torch.cat((output[i], max_detections))
-        
+
+        # 去除图片灰条
         if output[i] is not None:
             output[i]           = output[i].cpu().numpy()
             box_xy, box_wh      = (output[i][:, 0:2] + output[i][:, 2:4])/2, output[i][:, 2:4] - output[i][:, 0:2]

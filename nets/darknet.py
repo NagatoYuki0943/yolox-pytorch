@@ -1,3 +1,11 @@
+"""
+使用了V5中的focus
+使用了SPP结构
+激活函数:
+    3         -> v4   -> x
+    LeakyReLU -> Mish -> SiLU(平滑的relu)
+"""
+
 #!/usr/bin/env python3
 # -*- coding:utf-8 -*-
 # Copyright (c) Megvii, Inc. and its affiliates.
@@ -5,11 +13,18 @@
 import torch
 from torch import nn
 
+#---------------------------------------------------#
+#   SiLU
+#   nn.SiLU() or F.silu()
+#---------------------------------------------------#
 class SiLU(nn.Module):
     @staticmethod
     def forward(x):
         return x * torch.sigmoid(x)
 
+#---------------------------------------------------#
+#   获取激活函数
+#---------------------------------------------------#
 def get_activation(name="silu", inplace=True):
     if name == "silu":
         module = SiLU()
@@ -21,19 +36,9 @@ def get_activation(name="silu", inplace=True):
         raise AttributeError("Unsupported act type: {}".format(name))
     return module
 
-class Focus(nn.Module):
-    def __init__(self, in_channels, out_channels, ksize=1, stride=1, act="silu"):
-        super().__init__()
-        self.conv = BaseConv(in_channels * 4, out_channels, ksize, stride, act=act)
-
-    def forward(self, x):
-        patch_top_left  = x[...,  ::2,  ::2]
-        patch_bot_left  = x[..., 1::2,  ::2]
-        patch_top_right = x[...,  ::2, 1::2]
-        patch_bot_right = x[..., 1::2, 1::2]
-        x = torch.cat((patch_top_left, patch_bot_left, patch_top_right, patch_bot_right,), dim=1,)
-        return self.conv(x)
-
+#---------------------------------------------------#
+#   conv + bn + 激活函数
+#---------------------------------------------------#
 class BaseConv(nn.Module):
     def __init__(self, in_channels, out_channels, ksize, stride, groups=1, bias=False, act="silu"):
         super().__init__()
@@ -48,6 +53,9 @@ class BaseConv(nn.Module):
     def fuseforward(self, x):
         return self.act(self.conv(x))
 
+#---------------------------------------------------#
+#   深度可分离卷积
+#---------------------------------------------------#
 class DWConv(nn.Module):
     def __init__(self, in_channels, out_channels, ksize, stride=1, act="silu"):
         super().__init__()
@@ -58,29 +66,35 @@ class DWConv(nn.Module):
         x = self.dconv(x)
         return self.pconv(x)
 
-class SPPBottleneck(nn.Module):
-    def __init__(self, in_channels, out_channels, kernel_sizes=(5, 9, 13), activation="silu"):
+#---------------------------------------------------#
+#   Focus V5中使用了
+#   一张图片每隔一个像素点拿一个值组成一张图片,最后可以让宽高变为原来一半,通道变为4倍  最后做一次卷积变换到合适维度
+#   4x4x3 = 48 = 2x2x12=48
+#---------------------------------------------------#
+class Focus(nn.Module):
+    def __init__(self, in_channels, out_channels, ksize=1, stride=1, act="silu"):
         super().__init__()
-        hidden_channels = in_channels // 2
-        self.conv1      = BaseConv(in_channels, hidden_channels, 1, stride=1, act=activation)
-        self.m          = nn.ModuleList([nn.MaxPool2d(kernel_size=ks, stride=1, padding=ks // 2) for ks in kernel_sizes])
-        conv2_channels  = hidden_channels * (len(kernel_sizes) + 1)
-        self.conv2      = BaseConv(conv2_channels, out_channels, 1, stride=1, act=activation)
+        self.conv = BaseConv(in_channels * 4, out_channels, ksize, stride, act=act)
 
     def forward(self, x):
-        x = self.conv1(x)
-        x = torch.cat([x] + [m(x) for m in self.m], dim=1)
-        x = self.conv2(x)
-        return x
+        #                  前边维度都要            2       3
+        patch_top_left  = x[..., 0::2, 0::2]    # 0 2...  0 2...
+        patch_bot_left  = x[..., 1::2, 0::2]    # 1 3...  0 2...
+        patch_top_right = x[..., 0::2, 1::2]    # 0 2...  1 3...
+        patch_bot_right = x[..., 1::2, 1::2]    # 1 3...  1 3...
+        x = torch.cat((patch_top_left, patch_bot_left, patch_top_right, patch_bot_right,), dim=1,)
+        return self.conv(x)
 
 #--------------------------------------------------#
 #   残差结构的构建，小的残差结构
+#   在这里通道和宽高都不变
+#   两层卷积 1x1和3x3
 #--------------------------------------------------#
 class Bottleneck(nn.Module):
     # Standard bottleneck
     def __init__(self, in_channels, out_channels, shortcut=True, expansion=0.5, depthwise=False, act="silu",):
         super().__init__()
-        hidden_channels = int(out_channels * expansion)
+        hidden_channels = int(out_channels * expansion) # 中间通道减少一半
         Conv = DWConv if depthwise else BaseConv
         #--------------------------------------------------#
         #   利用1x1卷积进行通道数的缩减。缩减率一般是50%
@@ -90,6 +104,8 @@ class Bottleneck(nn.Module):
         #   利用3x3卷积进行通道数的拓张。并且完成特征提取
         #--------------------------------------------------#
         self.conv2 = Conv(hidden_channels, out_channels, 3, stride=1, act=act)
+
+        # 只有使用残差且 in_channels == out_channels 时才使用残差模块
         self.use_add = shortcut and in_channels == out_channels
 
     def forward(self, x):
@@ -98,44 +114,58 @@ class Bottleneck(nn.Module):
             y = y + x
         return y
 
+#--------------------------------------------------------------------#
+#   CSPdarknet的结构块,每个stage的结构
+#
+#   CSPnet结构并不算复杂，就是将原来的残差块的堆叠进行了一个拆分，拆成左右两部分:
+#   主干部分继续进行原来的残差块的堆叠；
+#   另一部分则像一个残差边一样，经过少量处理直接连接到最后。
+#   因此可以认为CSP中存在一个大的残差边。
+#
+#   V4中先进行了一次卷积让通道翻倍,宽高减半,这里没有做,而是分出去做了,直接就是分为两个分支了,所以最终宽高不变,维度也不变
+#--------------------------------------------------------------------#
 class CSPLayer(nn.Module):
     def __init__(self, in_channels, out_channels, n=1, shortcut=True, expansion=0.5, depthwise=False, act="silu",):
-        # ch_in, ch_out, number, shortcut, groups, expansion
+        #                                       Res次数, shortcut
         super().__init__()
-        hidden_channels = int(out_channels * expansion)  
+        # 两个分支中间维度缩减一半
+        hidden_channels = int(out_channels * expansion)
+
         #--------------------------------------------------#
-        #   主干部分的初次卷积
+        #   右侧: 主干部分的初次卷积 1x1Conv
         #--------------------------------------------------#
         self.conv1  = BaseConv(in_channels, hidden_channels, 1, stride=1, act=act)
-        #--------------------------------------------------#
-        #   大的残差边部分的初次卷积
-        #--------------------------------------------------#
-        self.conv2  = BaseConv(in_channels, hidden_channels, 1, stride=1, act=act)
-        #-----------------------------------------------#
-        #   对堆叠的结果进行卷积的处理
-        #-----------------------------------------------#
-        self.conv3  = BaseConv(2 * hidden_channels, out_channels, 1, stride=1, act=act)
-
         #--------------------------------------------------#
         #   根据循环的次数构建上述Bottleneck残差结构
         #--------------------------------------------------#
         module_list = [Bottleneck(hidden_channels, hidden_channels, shortcut, 1.0, depthwise, act=act) for _ in range(n)]
         self.m      = nn.Sequential(*module_list)
 
+        #--------------------------------------------------#
+        #   左侧: 大的残差边部分的初次卷积(只有一次1x1Conv)
+        #--------------------------------------------------#
+        self.conv2  = BaseConv(in_channels, hidden_channels, 1, stride=1, act=act)
+
+        #-----------------------------------------------#
+        #   最终: 对堆叠的结果进行卷积的处理 1x1Conv
+        #-----------------------------------------------#
+        self.conv3  = BaseConv(2 * hidden_channels, out_channels, 1, stride=1, act=act)
+
     def forward(self, x):
         #-------------------------------#
         #   x_1是主干部分
         #-------------------------------#
         x_1 = self.conv1(x)
+        #-----------------------------------------------#
+        #   主干部分利用残差结构堆叠继续进行特征提取
+        #-----------------------------------------------#
+        x_1 = self.m(x_1)
+
         #-------------------------------#
         #   x_2是大的残差边部分
         #-------------------------------#
         x_2 = self.conv2(x)
 
-        #-----------------------------------------------#
-        #   主干部分利用残差结构堆叠继续进行特征提取
-        #-----------------------------------------------#
-        x_1 = self.m(x_1)
         #-----------------------------------------------#
         #   主干部分和大的残差边部分进行堆叠
         #-----------------------------------------------#
@@ -145,8 +175,37 @@ class CSPLayer(nn.Module):
         #-----------------------------------------------#
         return self.conv3(x)
 
+#---------------------------------------------------#
+#   SPP结构，利用不同大小的池化核进行池化,增大感受野
+#   池化后和输入数据进行维度堆叠
+#   pool_sizes=[1, 5, 9, 13] 1不变,所以不用做了
+#---------------------------------------------------#
+class SPPBottleneck(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_sizes=(5, 9, 13), activation="silu"):
+        super().__init__()
+        hidden_channels = in_channels // 2
+        # 1x1Conv缩减通道
+        self.conv1      = BaseConv(in_channels, hidden_channels, 1, stride=1, act=activation)
+        #                                                             stride=1且有padding,所以最终大小不变
+        self.m          = nn.ModuleList([nn.MaxPool2d(kernel_size=ks, stride=1, padding=ks // 2) for ks in kernel_sizes])
+        conv2_channels  = hidden_channels * (len(kernel_sizes) + 1)
+        # 1x1Conv调整通道
+        self.conv2      = BaseConv(conv2_channels, out_channels, 1, stride=1, act=activation)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        # maxpool时kernel=1不用做,所以要加上[x]
+        x = torch.cat([x] + [m(x) for m in self.m], dim=1)
+        x = self.conv2(x)
+        return x
+
 class CSPDarknet(nn.Module):
-    def __init__(self, dep_mul, wid_mul, out_features=("dark3", "dark4", "dark5"), depthwise=False, act="silu",):
+    def __init__(self,
+                dep_mul,    # 深度系数
+                wid_mul,    # 宽度系数
+                out_features=("dark3", "dark4", "dark5"),   # 返回的层数
+                depthwise=False,    # 是否使用深度可分离卷积
+                act="silu",):       # 激活函数
         super().__init__()
         assert out_features, "please provide output features of Darknet"
         self.out_features = out_features
@@ -157,10 +216,12 @@ class CSPDarknet(nn.Module):
         #   初始的基本通道是64
         #-----------------------------------------------#
         base_channels   = int(wid_mul * 64)  # 64
+        #   每个stage的
         base_depth      = max(round(dep_mul * 3), 1)  # 3
-        
+
         #-----------------------------------------------#
         #   利用focus网络结构进行特征提取
+        #           focus特征提取       卷积
         #   640, 640, 3 -> 320, 320, 12 -> 320, 320, 64
         #-----------------------------------------------#
         self.stem = Focus(3, base_channels, ksize=3, act=act)

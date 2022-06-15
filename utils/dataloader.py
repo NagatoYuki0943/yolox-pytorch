@@ -285,7 +285,7 @@ class YoloDataset(Dataset):
             elif index == 3:
                 dx = int(w*min_offset_x)
                 dy = int(h*min_offset_y) - nh
-            
+
             new_image = Image.new('RGB', (w,h), (128,128,128))
             new_image.paste(image, (dx, dy))
             image_data = np.array(new_image)
@@ -307,7 +307,7 @@ class YoloDataset(Dataset):
                 box = box[np.logical_and(box_w>1, box_h>1)]
                 box_data = np.zeros((len(box),5))
                 box_data[:len(box)] = box
-            
+
             image_datas.append(image_data)
             box_datas.append(box_data)
 

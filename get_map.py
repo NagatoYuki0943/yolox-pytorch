@@ -1,3 +1,9 @@
+"""
+要在yolo.py中设置model_path,classes_path,confidence,nms_iou等,和predict时参数相同
+classes_path和预测时使用的相同
+VOCdevkit_path是数据集文件夹
+"""
+
 import os
 import xml.etree.ElementTree as ET
 
@@ -100,7 +106,7 @@ if __name__ == "__main__":
                 image.save(os.path.join(map_out_path, "images-optional/" + image_id + ".jpg"))
             yolo.get_map_txt(image_id, image, class_names, map_out_path)
         print("Get predict result done.")
-        
+
     if map_mode == 0 or map_mode == 2:
         print("Get ground truth result.")
         for image_id in tqdm(image_ids):

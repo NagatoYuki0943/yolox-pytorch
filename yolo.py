@@ -1,3 +1,7 @@
+"""
+model_path ,classes_path, input_shape, confidence, nms_iou
+"""
+
 import colorsys
 import os
 import time
@@ -25,8 +29,8 @@ class YOLO(object):
         #   验证集损失较低不代表mAP较高，仅代表该权值在验证集上泛化性能较好。
         #   如果出现shape不匹配，同时要注意训练时的model_path和classes_path参数的修改
         #--------------------------------------------------------------------------#
-        "model_path"        : 'model_data/yolox_s.pth',
-        "classes_path"      : 'model_data/coco_classes.txt',
+        "model_path"        : 'logs/ep100-loss2.579-val_loss2.908.pth',
+        "classes_path"      : 'model_data/voc_classes.txt',
         #---------------------------------------------------------------------#
         #   输入图片的大小，必须为32的倍数。
         #---------------------------------------------------------------------#
@@ -40,7 +44,7 @@ class YOLO(object):
         #---------------------------------------------------------------------#
         "confidence"        : 0.5,
         #---------------------------------------------------------------------#
-        #   非极大抑制所用到的nms_iou大小
+        #   非极大抑制所用到的nms_iou大小,越小代表越严格
         #---------------------------------------------------------------------#
         "nms_iou"           : 0.3,
         #---------------------------------------------------------------------#
@@ -69,7 +73,7 @@ class YOLO(object):
         self.__dict__.update(self._defaults)
         for name, value in kwargs.items():
             setattr(self, name, value)
-            
+
         #---------------------------------------------------#
         #   获得种类和先验框的数量
         #---------------------------------------------------#
@@ -130,14 +134,17 @@ class YOLO(object):
             #   将图像输入网络当中进行预测！
             #---------------------------------------------------------#
             outputs = self.net(images)
+            #---------------------------------------------------------#
+            #   将预测结果进行解码,一次传入全部图片
+            #---------------------------------------------------------#
             outputs = decode_outputs(outputs, self.input_shape)
             #---------------------------------------------------------#
             #   将预测框进行堆叠，然后进行非极大抑制
             #---------------------------------------------------------#
-            results = non_max_suppression(outputs, self.num_classes, self.input_shape, 
+            results = non_max_suppression(outputs, self.num_classes, self.input_shape,
                         image_shape, self.letterbox_image, conf_thres = self.confidence, nms_thres = self.nms_iou)
-                                                    
-            if results[0] is None: 
+
+            if results[0] is None:
                 return image
 
             top_label   = np.array(results[0][:, 6], dtype = 'int32')
@@ -182,12 +189,13 @@ class YOLO(object):
         #   图像绘制
         #---------------------------------------------------------#
         for i, c in list(enumerate(top_label)):
-            predicted_class = self.class_names[int(c)]
-            box             = top_boxes[i]
-            score           = top_conf[i]
+            predicted_class = self.class_names[int(c)]  # 种类
+            box             = top_boxes[i]              # 坐标
+            score           = top_conf[i]               # 置信度
 
             top, left, bottom, right = box
 
+            # 防止超出边界
             top     = max(0, np.floor(top).astype('int32'))
             left    = max(0, np.floor(left).astype('int32'))
             bottom  = min(image.size[1], np.floor(bottom).astype('int32'))
@@ -198,7 +206,7 @@ class YOLO(object):
             label_size = draw.textsize(label, font)
             label = label.encode('utf-8')
             print(label, top, left, bottom, right)
-            
+
             if top - label_size[1] >= 0:
                 text_origin = np.array([left, top - label_size[1]])
             else:
@@ -358,7 +366,7 @@ class YOLO(object):
         print('Onnx model save as {}'.format(model_path))
         
     def get_map_txt(self, image_id, image, class_names, map_out_path):
-        f = open(os.path.join(map_out_path, "detection-results/"+image_id+".txt"),"w") 
+        f = open(os.path.join(map_out_path, "detection-results/"+image_id+".txt"),"w")
         image_shape = np.array(np.shape(image)[0:2])
         #---------------------------------------------------------#
         #   在这里将图像转换成RGB图像，防止灰度图在预测时报错。
@@ -387,10 +395,10 @@ class YOLO(object):
             #---------------------------------------------------------#
             #   将预测框进行堆叠，然后进行非极大抑制
             #---------------------------------------------------------#
-            results = non_max_suppression(outputs, self.num_classes, self.input_shape, 
+            results = non_max_suppression(outputs, self.num_classes, self.input_shape,
                         image_shape, self.letterbox_image, conf_thres = self.confidence, nms_thres = self.nms_iou)
-                                                    
-            if results[0] is None: 
+
+            if results[0] is None:
                 return
 
             top_label   = np.array(results[0][:, 6], dtype = 'int32')
@@ -409,4 +417,4 @@ class YOLO(object):
             f.write("%s %s %s %s %s %s\n" % (predicted_class, score[:6], str(int(left)), str(int(top)), str(int(right)),str(int(bottom))))
 
         f.close()
-        return 
+        return
