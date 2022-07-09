@@ -137,6 +137,7 @@ class YOLO(object):
             outputs = self.net(images)
             #---------------------------------------------------------#
             #   将预测结果进行解码,一次传入全部图片
+            #   outputs: [batch_size, 8400, 5 + num_classes]
             #---------------------------------------------------------#
             outputs = decode_outputs(outputs, self.input_shape)
             #---------------------------------------------------------#
@@ -148,9 +149,9 @@ class YOLO(object):
             if results[0] is None:
                 return image
 
-            top_label   = np.array(results[0][:, 6], dtype = 'int32')
-            top_conf    = results[0][:, 4] * results[0][:, 5]
-            top_boxes   = results[0][:, :4]
+            top_label   = np.array(results[0][:, 6], dtype = 'int32')   # class_pred(种类预测值)
+            top_conf    = results[0][:, 4] * results[0][:, 5]           # obj_conf(是否包含物体置信度) * class_conf(种类置信度) 结果是1维数据
+            top_boxes   = results[0][:, :4]                             # x1, y1, x2, y2
         #---------------------------------------------------------#
         #   设置字体与边框厚度
         #---------------------------------------------------------#

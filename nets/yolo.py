@@ -357,6 +357,7 @@ class YoloBody(nn.Module):
         fpn_outs    = self.backbone.forward(x)
 
         #---------------------------------------------------#
+        #   output是一个列表
         #   80, 80, 4+1+num_classes
         #   40, 40, 4+1+num_classes
         #   20, 20, 4+1+num_classes
