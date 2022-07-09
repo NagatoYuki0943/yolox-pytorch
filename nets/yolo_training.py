@@ -18,6 +18,10 @@ class IOUloss(nn.Module):
         self.loss_type = loss_type
 
     def forward(self, pred, target):
+        """
+        pred:   [num_anchors, xywh]  num_anchors是猜的
+        target: [num_anchors, xywh]
+        """
         assert pred.shape[0] == target.shape[0]
 
         pred = pred.view(-1, 4)
@@ -57,7 +61,7 @@ class IOUloss(nn.Module):
 
         return loss
 
-class YOLOLoss(nn.Module):    
+class YOLOLoss(nn.Module):
     def __init__(self, num_classes, fp16, strides=[8, 16, 32]):
         super().__init__()
         self.num_classes        = num_classes
@@ -112,7 +116,7 @@ class YOLOLoss(nn.Module):
         #-----------------------------------------------#
         #   [batch, n_anchors_all, 4]
         #-----------------------------------------------#
-        bbox_preds  = outputs[:, :, :4]  
+        bbox_preds  = outputs[:, :, :4]
         #-----------------------------------------------#
         #   [batch, n_anchors_all, 1]
         #-----------------------------------------------#
@@ -120,7 +124,7 @@ class YOLOLoss(nn.Module):
         #-----------------------------------------------#
         #   [batch, n_anchors_all, n_cls]
         #-----------------------------------------------#
-        cls_preds   = outputs[:, :, 5:]  
+        cls_preds   = outputs[:, :, 5:]
 
         total_num_anchors   = outputs.shape[1]
         #-----------------------------------------------#
@@ -159,9 +163,9 @@ class YOLOLoss(nn.Module):
                 cls_preds_per_image     = cls_preds[batch_idx]
                 obj_preds_per_image     = obj_preds[batch_idx]
 
-                gt_matched_classes, fg_mask, pred_ious_this_matching, matched_gt_inds, num_fg_img = self.get_assignments( 
+                gt_matched_classes, fg_mask, pred_ious_this_matching, matched_gt_inds, num_fg_img = self.get_assignments(
                     num_gt, total_num_anchors, gt_bboxes_per_image, gt_classes, bboxes_preds_per_image, cls_preds_per_image, obj_preds_per_image,
-                    expanded_strides, x_shifts, y_shifts, 
+                    expanded_strides, x_shifts, y_shifts,
                 )
                 torch.cuda.empty_cache()
                 num_fg      += num_fg_img
@@ -211,7 +215,7 @@ class YOLOLoss(nn.Module):
         #-------------------------------------------------------#
         pair_wise_ious      = self.bboxes_iou(gt_bboxes_per_image, bboxes_preds_per_image, False)
         pair_wise_ious_loss = -torch.log(pair_wise_ious + 1e-8)
-        
+
         #-------------------------------------------------------#
         #   cls_preds_          [num_gt, fg_mask, num_classes]
         #   gt_cls_per_image    [num_gt, fg_mask, num_classes]
@@ -232,7 +236,7 @@ class YOLOLoss(nn.Module):
         num_fg, gt_matched_classes, pred_ious_this_matching, matched_gt_inds = self.dynamic_k_matching(cost, pair_wise_ious, gt_classes, num_gt, fg_mask)
         del pair_wise_cls_loss, cost, pair_wise_ious, pair_wise_ious_loss
         return gt_matched_classes, fg_mask, pred_ious_this_matching, matched_gt_inds, num_fg
-    
+
     def bboxes_iou(self, bboxes_a, bboxes_b, xyxy=True):
         if bboxes_a.shape[1] != 4 or bboxes_b.shape[1] != 4:
             raise IndexError
@@ -325,7 +329,7 @@ class YOLOLoss(nn.Module):
         #-------------------------------------------------------#
         #   cost                [num_gt, fg_mask]
         #   pair_wise_ious      [num_gt, fg_mask]
-        #   gt_classes          [num_gt]        
+        #   gt_classes          [num_gt]
         #   fg_mask             [n_anchors_all]
         #   matching_matrix     [num_gt, fg_mask]
         #-------------------------------------------------------#
@@ -341,7 +345,7 @@ class YOLOLoss(nn.Module):
         n_candidate_k           = min(10, pair_wise_ious.size(1))
         topk_ious, _            = torch.topk(pair_wise_ious, n_candidate_k, dim=1)
         dynamic_ks              = torch.clamp(topk_ious.sum(1).int(), min=1)
-        
+
         for gt_idx in range(num_gt):
             #------------------------------------------------------------#
             #   给每个真实框选取最小的动态k个点
@@ -390,7 +394,7 @@ def is_parallel(model):
 def de_parallel(model):
     # De-parallelize a model: returns single-GPU model if model is of type DP or DDP
     return model.module if is_parallel(model) else model
-    
+
 def copy_attr(a, b, include=(), exclude=()):
     # Copy attributes from b to a, options to only include [...] and to exclude [...]
     for k, v in b.__dict__.items():
