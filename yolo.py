@@ -133,15 +133,22 @@ class YOLO(object):
                 images = images.cuda()
             #---------------------------------------------------------#
             #   将图像输入网络当中进行预测！
+            #   outputs = [[b, 25, 80, 80],
+            #              [b, 25, 40, 40],
+            #              [b, 25, 20, 20]]
             #---------------------------------------------------------#
             outputs = self.net(images)
             #---------------------------------------------------------#
             #   将预测结果进行解码,一次传入全部图片
-            #   outputs: [batch_size, 8400, 5 + num_classes]
+            #   outputs: [b, 8400, 85]
             #---------------------------------------------------------#
             outputs = decode_outputs(outputs, self.input_shape)
             #---------------------------------------------------------#
             #   将预测框进行堆叠，然后进行非极大抑制
+            #   results = [[
+            #               [x1, y1, x2, y2, obj_conf(是否包含物体置信度), class_conf(种类置信度), class_pred(种类预测值)],
+            #               ...
+            #           ]]
             #---------------------------------------------------------#
             results = non_max_suppression(outputs, self.num_classes, self.input_shape,
                         image_shape, self.letterbox_image, conf_thres = self.confidence, nms_thres = self.nms_iou)

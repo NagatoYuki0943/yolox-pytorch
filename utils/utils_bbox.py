@@ -34,10 +34,10 @@ def yolo_correct_boxes(box_xy, box_wh, input_shape, image_shape, letterbox_image
 #------------------------#
 def decode_outputs(outputs, input_shape):
     """
-    outputs:        输入前代表每个特征层的预测结果
-        batch_size, 5 + num_classes, 80, 80
-        batch_size, 5 + num_classes, 40, 40
-        batch_size, 5 + num_classes, 20, 20
+    outputs: 输入前代表每个特征层的预测结果
+        [[b, 5 + num_classes, 80, 80],
+        [b, 5 + num_classes, 40, 40],
+        [b, 5 + num_classes, 20, 20]]
     input_shape:    输入图像大小 640 640
 
     """
@@ -49,14 +49,13 @@ def decode_outputs(outputs, input_shape):
     #   outputs输入前代表每个特征层的预测结果
     #
     #   flatten(start_dim=2) 将后面两个宽高铺平放到一起
-    #   batch_size, 4 + 1 + num_classes, 80, 80 => batch_size, 5 + num_classes, 6400
-    #   batch_size, 5 + num_classes, 40, 40
-    #   batch_size, 5 + num_classes, 20, 20
+    #   b, 4 + 1 + num_classes, 80, 80 => b, 5 + num_classes, 6400
+    #   b, 5 + num_classes, 40, 40
+    #   b, 5 + num_classes, 20, 20
     #
     #   三层堆叠到一起
-    #   batch_size, 4 + 1 + num_classes, 6400 + 1600 + 400 -> batch_size, 4 + 1 + num_classes, 8400
-    #   堆叠,转置后为"""
-    #       [batch_size, 8400, 5 + num_classes]
+    #   b, 4 + 1 + num_classes, 6400 + 1600 + 400 -> b, 4 + 1 + num_classes, 8400
+    #   堆叠,转置后为 [b, 8400, 5 + num_classes]
     #---------------------------------------------------#
     outputs = torch.cat([x.flatten(start_dim=2) for x in outputs], dim=2).permute(0, 2, 1)
     #---------------------------------------------------#
@@ -105,7 +104,7 @@ def decode_outputs(outputs, input_shape):
     outputs[..., [0,2]] = outputs[..., [0,2]] / input_shape[1]      # x w   数据是hw, 所以先用的[1]
     outputs[..., [1,3]] = outputs[..., [1,3]] / input_shape[0]      # y h
     #---------------------------#
-    #   outputs: [batch_size, 8400, 5 + num_classes]
+    #   outputs: [b, 8400, 5 + num_classes]
     #---------------------------#
     return outputs
 
@@ -113,8 +112,8 @@ def decode_outputs(outputs, input_shape):
 """非极大值抑制"""
 def non_max_suppression(prediction, num_classes, input_shape, image_shape, letterbox_image, conf_thres=0.5, nms_thres=0.4):
     #----------------------------------------------------------#
-    #   将预测结果的格式转换成左上角右下角坐标的格式。
-    #   prediction:   [batch_size, num_anchors, 5 + num_classes]
+    #   将预测结果的格式转换成左上角右下角坐标的格式,坐标宽高相对原图是归一化的
+    #   prediction:   [b, num_anchors, 5 + num_classes]
     #----------------------------------------------------------#
     box_corner           = prediction.new(prediction.shape)
     box_corner[:, :, 0]  = prediction[:, :, 0] - prediction[:, :, 2] / 2    # x - 1/2 w = x1
@@ -218,5 +217,10 @@ def non_max_suppression(prediction, num_classes, input_shape, image_shape, lette
             output[i]           = output[i].cpu().numpy()
             box_xy, box_wh      = (output[i][:, 0:2] + output[i][:, 2:4])/2, output[i][:, 2:4] - output[i][:, 0:2]
             output[i][:, :4]    = yolo_correct_boxes(box_xy, box_wh, input_shape, image_shape, letterbox_image)
-    # [10, 7]
+    #---------------------------------------------------------#
+    #   results = [[
+    #               [x1, y1, x2, y2, obj_conf(是否包含物体置信度), class_conf(种类置信度), class_pred(种类预测值)],
+    #               ...
+    #           ]]
+    #---------------------------------------------------------#
     return output

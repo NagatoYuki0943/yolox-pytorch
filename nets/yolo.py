@@ -358,9 +358,9 @@ class YoloBody(nn.Module):
 
         #---------------------------------------------------#
         #   output是一个列表
-        #   80, 80, 4+1+num_classes
-        #   40, 40, 4+1+num_classes
-        #   20, 20, 4+1+num_classes
+        #   b, 25, 80, 80
+        #   b, 25, 40, 40
+        #   b, 25, 20, 20
         #---------------------------------------------------#
         outputs     = self.head.forward(fpn_outs)
         return outputs
