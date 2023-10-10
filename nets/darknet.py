@@ -126,7 +126,6 @@ class Bottleneck(nn.Module):
 #--------------------------------------------------------------------#
 class CSPLayer(nn.Module):
     def __init__(self, in_channels, out_channels, n=1, shortcut=True, expansion=0.5, depthwise=False, act="silu",):
-        #                                       Res次数, shortcut
         super().__init__()
         # 两个分支中间维度缩减一半
         hidden_channels = int(out_channels * expansion)

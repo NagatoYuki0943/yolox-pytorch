@@ -364,9 +364,3 @@ class YoloBody(nn.Module):
         #---------------------------------------------------#
         outputs     = self.head.forward(fpn_outs)
         return outputs
-
-
-if __name__ == "__main__":
-    model = YoloBody(80, 's')
-    state_dict = torch.load("F:\BaiduYunDownload\yolox_s.pth")
-    model.load_state_dict(state_dict)
